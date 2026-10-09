@@ -1,0 +1,12 @@
+# Python virtual environment
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Node / Expo (for later frontend development)
+node_modules/
+.expo/
