@@ -1,7 +1,7 @@
 import os
 import json
 from typing import List, Optional
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException, status
 from pydantic import BaseModel
 import asyncpg
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 app = FastAPI(
     title="HoldUp Test API",
     description="Skeleton API for route visualization and hold inventory pipeline testing.",
-    version="0.1.0"
+    version="0.2.0"
 )
 
 
@@ -76,16 +76,23 @@ async def shutdown():
 # ==============================================================================
 # 4. PYDANTIC SCHEMAS (DATA VALIDATION & SERIALIZATION)
 # ==============================================================================
-class HoldItem(BaseModel):
-    """
-    Defines the shape and types of data returned by the /holds endpoint.
-    """
-    id: str
-    hold_code: str
+
+# For creating a master hold catalog entry
+class HoldCreate(BaseModel):
+    name: str
+    brand: Optional[str] = None
+    manufacturer: Optional[str] = None
+    hold_type: Optional[str] = None
+    image_url: Optional[str] = None
+    model_3d_url: Optional[str] = None
+
+
+# For creating a physical gym inventory entry
+class HoldInventoryCreate(BaseModel):
+    gym_id: str
+    hold_catalog_id: str
     color: str
-    hold_type: str
-    status: str
-    metadata: Optional[dict] = {}  # Holds nested JSON metadata (e.g., brand, size, CV confidence)
+    status: Optional[str] = "available"
 
 
 # ==============================================================================
@@ -94,34 +101,88 @@ class HoldItem(BaseModel):
 
 @app.get("/")
 async def root():
-    """
-    Root endpoint serving as a health check.
-    """
     return {"message": "Pipeline Skeleton API is active"}
 
 
-@app.get("/holds", response_model=List[HoldItem])
-async def get_hold_inventory(
-    status: Optional[str] = Query(None, description="Filter by status, e.g. available, on_wall, maintenance")
-):
+# --- HOLDS CATALOG ENDPOINTS ---
+
+@app.post("/holds", status_code=status.HTTP_201_CREATED)
+async def create_hold(hold: HoldCreate):
     """
-    Fetches hold inventory items from Supabase PostgreSQL.
-    Supports optional filtering by hold status via URL query parameters (e.g., /holds?status=available).
+    Creates a new master hold item in the global holds catalog.
     """
     async with db_pool.acquire() as connection:
-        if status:
-            # Explicitly cast UUID `id` to `text` so asyncpg outputs a standard string.
-            query = "SELECT id::text, hold_code, color, hold_type, status, metadata FROM hold_inventory WHERE status = $1"
-            rows = await connection.fetch(query, status)
-        else:
-            query = "SELECT id::text, hold_code, color, hold_type, status, metadata FROM hold_inventory"
-            rows = await connection.fetch(query)
+        # if not have the required field, send 400 back
+        query = """
+            INSERT INTO holds (name, brand, manufacturer, hold_type, image_url, model_3d_url)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id::text, name, brand, manufacturer, hold_type, image_url, model_3d_url;
+        """
+        row = await connection.fetchrow(
+            query,
+            hold.name,
+            hold.brand,
+            hold.manufacturer,
+            hold.hold_type,
+            hold.image_url,
+            hold.model_3d_url
+        )
+        return dict(row)
 
-        # Convert asyncpg Record objects directly to dicts.
-        # `metadata` is automatically decoded to a Python dict by the jsonb codec in init_connection.
+
+@app.get("/holds", response_model=List[dict])
+async def get_holds():
+    """
+    Fetches all items from the master holds catalog.
+    """
+    async with db_pool.acquire() as connection:
+        query = "SELECT id::text, name, brand, manufacturer, hold_type, image_url, model_3d_url FROM holds"
+        rows = await connection.fetch(query)
         return [dict(row) for row in rows]
 
+
+# --- HOLD INVENTORY ENDPOINTS ---
+
+@app.post("/hold-inventory", status_code=status.HTTP_201_CREATED)
+async def create_hold_inventory(item: HoldInventoryCreate):
+    """
+    Assigns a physical hold from the catalog to a specific gym's inventory.
+    """
+    async with db_pool.acquire() as connection:
+        query = """
+            INSERT INTO hold_inventory (gym_id, hold_catalog_id, color, status)
+            VALUES ($1::uuid, $2::uuid, $3, $4)
+            RETURNING id::text, gym_id::text, hold_catalog_id::text, color, status;
+        """
+        try:
+            row = await connection.fetchrow(
+                query,
+                item.gym_id,
+                item.hold_catalog_id,
+                item.color,
+                item.status
+            )
+            return dict(row)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/hold-inventory/{gym_id}", response_model=List[dict])
+async def get_gym_inventory(gym_id: str):
+    """
+    Fetches all physical hold inventory for a specific gym, joining with the master hold catalog details.
+    """
+    async with db_pool.acquire() as connection:
+        query = """
+            SELECT hi.id::text, hi.color, hi.status, h.name as hold_name, h.brand, h.hold_type, h.model_3d_url
+            FROM hold_inventory hi
+            JOIN holds h ON hi.hold_catalog_id = h.id
+            WHERE hi.gym_id = $1::uuid;
+        """
+        rows = await connection.fetch(query, gym_id)
+        return [dict(row) for row in rows]
+
+
 @app.get("/testing")
-async def get_stupid(
-):
+async def get_stupid():
     return ['successful test']
