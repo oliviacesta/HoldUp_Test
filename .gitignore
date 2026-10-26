@@ -10,3 +10,6 @@ __pycache__/
 # Node / Expo (for later frontend development)
 node_modules/
 .expo/
+
+# Supabase temp files
+supabase/.temp/
