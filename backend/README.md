@@ -86,6 +86,12 @@ If you need to test your backend from a mobile device (like a React Native/Expo 
 
 ---
 
+
+may also need to do brew install supabase/tap/supabase
+then: supabase login
+supabase link --project-ref ddawfvvrqemgzrnajtje
+
+
 ## 💡 Note on Hosting Limitations & Production
 * **Current Limitation:** Right now, your local computer hosts the endpoints. The API will work across the internet via Ngrok, but **if your computer goes to sleep or turns off, the API goes offline**.
 * **Final Product Solution:** For production, this backend will be deployed to a cloud-hosted PaaS provider (such as Render, Railway, or Fly.io) to ensure 24/7 availability with a permanent public URL.
